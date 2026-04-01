@@ -71,13 +71,13 @@ const SEED_STUDENTS = [
   mk("Alexander","P1"), mk("Lily","P1"), mk("Zari'Anna","P1"), mk("NeKwaur","P1"),
   mk("Marco","P2"), mk("Andrea","P2"), mk("Tykara","P2"), mk("Nyimah","P2"),
   mk("Delilah","P2"), mk("Valentina","P2"), mk("Ibrahim","P2"), mk("Byron","P2"),
-  mk("Carlos","P2"), mk("Andrew","P2"), mk("Manny","P2"), mk("Genesis","P2"),
+  mk("Carlos","P2"), mk("Andrew","P2"), mk("Manny","P2"),
   mk("Samar'j","P2"), mk("Aisha","P2"), mk("Fernando","P2"), mk("Jackeline","P2"),
   mk("Isaí","P2"), mk("J'Zyra","P2"), mk("Ja'cory","P2"), mk("Marie","P2"),
-  mk("Heyner","P2"),
+  mk("Heyner","P2"), mk("Genesis G.","P2"),
   mk("Anthony","P5"), mk("Kimberly","P5"), mk("Lena","P5"), mk("Joshua","P5"),
   mk("Litzy","P5"), mk("Gabriel","P5"), mk("Emily","P5"), mk("Carlos M.","P5"),
-  mk("Genesis P5","P5"), mk("Wilson","P5"), mk("Ashley","P5"), mk("Zyykee","P5"),
+  mk("Genesis N.","P5"), mk("Wilson","P5"), mk("Ashley","P5"), mk("Zyykee","P5"),
   mk("Jian","P5"), mk("Tukiya","P5"),
 ];
 
