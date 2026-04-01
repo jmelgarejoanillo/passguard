@@ -129,6 +129,10 @@ function Avatar({ student, size=42, ring=false }) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// ── localStorage helpers ───────────────────────────────────────────────────────
+const lsGet = (key, fallback) => { try { const v=localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
+const lsSet = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
+
 export default function App() {
   const [tab, setTab]                   = useState("dashboard");
   const [students, setStudents]         = useState(SEED_STUDENTS);
@@ -136,11 +140,11 @@ export default function App() {
   const [scheduleKey, setScheduleKey]   = useState("regular");
   const periods                         = SCHEDULES[scheduleKey].periods;
   const [passes, setPasses]             = useState([]);
-  const [history, setHistory]           = useState([]);
+  const [history, setHistory]           = useState(() => lsGet("pg_history", []));
   const [alerts, setAlerts]             = useState([]);
-  const [dailyCount, setDailyCount]     = useState({});
-  const [weeklyCount, setWeeklyCount]   = useState({});
-  const [lockouts, setLockouts]         = useState({});
+  const [dailyCount, setDailyCount]     = useState(() => lsGet("pg_dailyCount", {}));
+  const [weeklyCount, setWeeklyCount]   = useState(() => lsGet("pg_weeklyCount", {}));
+  const [lockouts, setLockouts]         = useState(() => lsGet("pg_lockouts", {}));
   const [restrictions, setRestrictions] = useState([]);
   const [conflicts, setConflicts]       = useState([]);
   const [settings, setSettings]         = useState({ dailyLimit:3, weeklyLimit:2, adminEmail:"jose.melgarejoanillo@k12.dc.gov" });
@@ -151,6 +155,12 @@ export default function App() {
   const [searchQ, setSearchQ]           = useState("");
   const [tick, setTick]                 = useState(0);
   const tickRef = useRef();
+
+  // persist key data to localStorage whenever it changes
+  useEffect(() => { lsSet("pg_history",    history);    }, [history]);
+  useEffect(() => { lsSet("pg_dailyCount", dailyCount); }, [dailyCount]);
+  useEffect(() => { lsSet("pg_weeklyCount",weeklyCount);}, [weeklyCount]);
+  useEffect(() => { lsSet("pg_lockouts",   lockouts);   }, [lockouts]);
 
   useEffect(() => { tickRef.current=setInterval(()=>setTick(t=>t+1),1000); return()=>clearInterval(tickRef.current); },[]);
 
@@ -253,7 +263,7 @@ export default function App() {
         {tab==="dashboard" && <DashTab {...sharedProps} />}
         {tab==="students"  && <StudentsTab {...sharedProps} />}
         {tab==="rules"     && <RulesTab {...sharedProps} />}
-        {tab==="history"   && <HistoryTab {...sharedProps} />}
+        {tab==="history"   && <HistoryTab history={history} setHistory={setHistory} students={students} bathrooms={bathrooms} />}
         {tab==="settings"  && <SettingsTab {...sharedProps} LOCKOUT_DAYS={LOCKOUT_DAYS} />}
       </div>
 
@@ -653,7 +663,7 @@ function RulesTab({ students,periods,restrictions,setRestrictions,conflicts,setC
 }
 
 // ══ HISTORY TAB ══════════════════════════════════════════════════════════════
-function HistoryTab({ history,students,bathrooms }) {
+function HistoryTab({ history,setHistory,students,bathrooms }) {
   if(!history.length) return (
     <div style={{ padding:40,textAlign:"center",color:C.sub }}>
       <div style={{ fontSize:44,marginBottom:12 }}>📋</div>
@@ -662,17 +672,26 @@ function HistoryTab({ history,students,bathrooms }) {
   );
   return (
     <div>
-      <div style={{ padding:"16px 16px 8px",fontWeight:800,fontSize:18 }}>History</div>
+      <div style={{ padding:"16px 16px 8px",display:"flex",alignItems:"center",justifyContent:"space-between" }}>
+        <div style={{ fontWeight:800,fontSize:18 }}>History <span style={{ color:C.sub,fontWeight:500,fontSize:14 }}>({history.length})</span></div>
+        <button style={{ ...igBtn("danger"),fontSize:12,padding:"6px 14px",borderRadius:8 }}
+          onClick={()=>{ if(window.confirm("Clear all pass history?")){ setHistory([]); localStorage.removeItem("pg_history"); } }}>
+          Clear All
+        </button>
+      </div>
       {history.map(h=>{
         const s=students.find(x=>x.id===h.studentId);
         const color=h.elapsed>=RED_MS?C.red:h.elapsed>=YELLOW_MS?C.yellow:C.green;
         const label=h.elapsed>=RED_MS?"Red Code":h.elapsed>=YELLOW_MS?"Over limit":"Normal";
+        const date = h.endTime ? new Date(h.endTime).toLocaleDateString(undefined,{month:"short",day:"numeric"}) : "";
+        const time = h.endTime ? new Date(h.endTime).toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"}) : "";
         return (
           <div key={h.id} style={{ display:"flex",alignItems:"center",gap:12,padding:"12px 16px",background:C.white,borderBottom:`1px solid ${C.border}` }}>
             {s&&<Avatar student={s} size={44}/>}
             <div style={{ flex:1,minWidth:0 }}>
               <div style={{ fontWeight:700,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{s?.name||"Unknown"}</div>
               <div style={{ color:C.sub,fontSize:12,marginTop:2 }}>{h.period} · {bathrooms.find(b=>b.id===h.bathroomId)?.name||h.bathroomId}</div>
+              <div style={{ color:C.sub,fontSize:11,marginTop:1 }}>{date} {time}</div>
             </div>
             <div style={{ textAlign:"right",flexShrink:0 }}>
               <div style={{ fontWeight:900,fontSize:18,color,fontVariantNumeric:"tabular-nums" }}>{fmtMs(h.elapsed)}</div>
