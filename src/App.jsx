@@ -50,6 +50,20 @@ const SEED_PERIODS = [
   { id:"P5",  name:"Period 5",  start:"14:17", end:"15:10" },
 ];
 
+const WVW_PERIODS = [
+  { id:"P5",  name:"Period 5",  start:"08:45", end:"09:35" },
+  { id:"P1",  name:"Period 1",  start:"09:40", end:"10:30" },
+  { id:"P2",  name:"Period 2",  start:"11:25", end:"12:15" },
+  { id:"P3",  name:"Period 3",  start:"12:20", end:"13:10" },
+  { id:"P4",  name:"Period 4",  start:"13:15", end:"14:05" },
+  { id:"ADV", name:"Advisory",  start:"14:10", end:"15:10" },
+];
+
+const SCHEDULES = {
+  regular: { label:"Regular",  periods: SEED_PERIODS },
+  wvw:     { label:"WVW",      periods: WVW_PERIODS  },
+};
+
 const SEED_STUDENTS = [
   mk("Paola","P1"), mk("Aida","P1"), mk("Kasey","P1"), mk("Ava","P1"),
   mk("Kamarie","P1"), mk("Don'Maira","P1"), mk("Gregory","P1"), mk("Mayra","P1"),
@@ -119,7 +133,8 @@ export default function App() {
   const [tab, setTab]                   = useState("dashboard");
   const [students, setStudents]         = useState(SEED_STUDENTS);
   const [bathrooms, setBathrooms]       = useState(SEED_BATHROOMS);
-  const [periods]                       = useState(SEED_PERIODS);
+  const [scheduleKey, setScheduleKey]   = useState("regular");
+  const periods                         = SCHEDULES[scheduleKey].periods;
   const [passes, setPasses]             = useState([]);
   const [history, setHistory]           = useState([]);
   const [alerts, setAlerts]             = useState([]);
@@ -196,7 +211,7 @@ export default function App() {
   const redCount=alerts.filter(a=>a.type==="red").length;
 
   const periodWindow = periodWindowCheck(periods);
-  const sharedProps = { students,setStudents,bathrooms,setBathrooms,periods,passes,history,alerts,dailyCount,weeklyCount,lockouts,setLockouts,restrictions,setRestrictions,conflicts,setConflicts,settings,setSettings,newStudent,setNewStudent,passModal,setPassModal,selectedBath,setSelectedBath,periodFilter,setPeriodFilter,searchQ,setSearchQ,tick,returnPass,issuePass,isLockedOut,dailyUsed,weeklyUsed,activePass,sName,redCount,periodWindow };
+  const sharedProps = { students,setStudents,bathrooms,setBathrooms,periods,passes,history,alerts,dailyCount,weeklyCount,lockouts,setLockouts,restrictions,setRestrictions,conflicts,setConflicts,settings,setSettings,newStudent,setNewStudent,passModal,setPassModal,selectedBath,setSelectedBath,periodFilter,setPeriodFilter,searchQ,setSearchQ,tick,returnPass,issuePass,isLockedOut,dailyUsed,weeklyUsed,activePass,sName,redCount,periodWindow,scheduleKey,setScheduleKey };
 
   return (
     <div style={{ fontFamily:"'Inter',-apple-system,BlinkMacSystemFont,sans-serif",background:C.bg,minHeight:"100vh",color:C.text,paddingBottom:70 }}>
@@ -218,7 +233,7 @@ export default function App() {
         <div style={{ maxWidth:600,margin:"0 auto",padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between" }}>
           <div>
             <div style={{ fontWeight:900,fontSize:24,letterSpacing:-1,background:GRAD,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",lineHeight:1.1 }}>PassGuard</div>
-            <div style={{ fontSize:10,color:C.sub,fontWeight:500,letterSpacing:.4 }}>by Jose Melgarejo</div>
+            <div style={{ fontSize:10,color:C.sub,fontWeight:500,letterSpacing:.4 }}>by Jose Melgarejo · <span style={{ fontWeight:700,color: scheduleKey==="wvw"?"#dd2a7b":C.sub }}>{SCHEDULES[scheduleKey].label}</span></div>
           </div>
           <div style={{ display:"flex",alignItems:"center",gap:10 }}>
             {redCount>0&&<div style={{ ...pill(C.red,"#fff",12),animation:"pulse 1s infinite",padding:"5px 12px",borderRadius:20 }}>🚨 {redCount} RED</div>}
@@ -239,7 +254,7 @@ export default function App() {
         {tab==="students"  && <StudentsTab {...sharedProps} />}
         {tab==="rules"     && <RulesTab {...sharedProps} />}
         {tab==="history"   && <HistoryTab {...sharedProps} />}
-        {tab==="settings"  && <SettingsTab {...sharedProps} />}
+        {tab==="settings"  && <SettingsTab {...sharedProps} LOCKOUT_DAYS={LOCKOUT_DAYS} />}
       </div>
 
       {/* BOTTOM NAV */}
@@ -671,10 +686,51 @@ function HistoryTab({ history,students,bathrooms }) {
 }
 
 // ══ SETTINGS TAB ═════════════════════════════════════════════════════════════
-function SettingsTab({ settings,setSettings,alerts,LOCKOUT_DAYS }) {
+function SettingsTab({ settings,setSettings,alerts,LOCKOUT_DAYS,scheduleKey,setScheduleKey }) {
   return (
     <div style={{ padding:16 }}>
       <div style={{ fontWeight:800,fontSize:18,marginBottom:16 }}>Settings</div>
+
+      {/* Schedule switcher */}
+      <div style={{ ...card,borderRadius:16,marginBottom:12 }}>
+        <div style={{ fontWeight:700,fontSize:15,marginBottom:4 }}>🗓 Schedule</div>
+        <div style={{ color:C.sub,fontSize:13,marginBottom:14 }}>Switch between your regular schedule and alternate schedules. WVW is only available on Wednesdays.</div>
+        <div style={{ display:"flex",gap:10 }}>
+          {Object.entries(SCHEDULES).map(([key,sch])=>{
+            const active = scheduleKey===key;
+            const isWvw = key==="wvw";
+            const today = new Date().getDay(); // 0=Sun,3=Wed
+            const wvwLocked = isWvw && today!==3;
+            return (
+              <div key={key} style={{ flex:1 }}>
+                <button
+                  disabled={wvwLocked}
+                  onClick={()=>{ if(!wvwLocked) setScheduleKey(key); }}
+                  style={{ width:"100%",border:"none",borderRadius:14,padding:"14px 10px",cursor:wvwLocked?"not-allowed":"pointer",opacity:wvwLocked?0.45:1,
+                    background: active ? GRAD : "#f5f5f5",
+                    color: active ? "#fff" : C.text,
+                    transition:"all .2s",
+                  }}
+                >
+                  <div style={{ fontWeight:800,fontSize:16 }}>{sch.label}</div>
+                  {isWvw && <div style={{ fontSize:11,marginTop:3,opacity:.85 }}>Wednesdays only</div>}
+                </button>
+                {active && (
+                  <div style={{ marginTop:10 }}>
+                    {sch.periods.map(p=>(
+                      <div key={p.id} style={{ display:"flex",justifyContent:"space-between",padding:"5px 2px",borderBottom:`1px solid ${C.border}`,fontSize:13 }}>
+                        <span style={{ fontWeight:600 }}>{p.name}</span>
+                        <span style={{ color:C.sub }}>{p.start} – {p.end}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div style={{ ...card,borderRadius:16,marginBottom:12 }}>
         <div style={{ fontWeight:700,fontSize:15,marginBottom:14 }}>Pass Limits</div>
         <div style={{ marginBottom:14 }}>
