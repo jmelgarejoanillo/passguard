@@ -1,4 +1,19 @@
 import { useState, useEffect, useRef } from "react";
+import { initializeApp } from "firebase/app";
+import { getDatabase, ref, set, onValue, remove, push, update } from "firebase/database";
+
+// ── Firebase config ────────────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyAGa-YdFmYnlUZZazsmfOkAiU6wPOGyMCg",
+  authDomain: "passguard-f448c.firebaseapp.com",
+  databaseURL: "https://passguard-f448c-default-rtdb.firebaseio.com",
+  projectId: "passguard-f448c",
+  storageBucket: "passguard-f448c.firebasestorage.app",
+  messagingSenderId: "945829801579",
+  appId: "1:945829801579:web:6dc3c51e5212a08f8dcb2e"
+};
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getDatabase(firebaseApp);
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 const pad = (n) => String(n).padStart(2, "0");
@@ -138,6 +153,8 @@ function Avatar({ student, size=42, ring=false }) {
 const lsGet = (key, fallback) => { try { const v=localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
 const lsSet = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
 
+const YEAR_END = "2026-06-20"; // end of school year lockout date
+
 export default function App() {
   const [tab, setTab]                   = useState("dashboard");
   const [students, setStudents]         = useState(SEED_STUDENTS);
@@ -150,22 +167,59 @@ export default function App() {
   const [dailyCount, setDailyCount]     = useState(() => lsGet("pg_dailyCount", {}));
   const [weeklyCount, setWeeklyCount]   = useState(() => lsGet("pg_weeklyCount", {}));
   const [lockouts, setLockouts]         = useState(() => lsGet("pg_lockouts", {}));
+  const [redOffenses, setRedOffenses]   = useState(() => lsGet("pg_redOffenses", {})); // {studentId: count}
   const [restrictions, setRestrictions] = useState([]);
   const [conflicts, setConflicts]       = useState([]);
-  const [settings, setSettings]         = useState({ dailyLimit:3, weeklyLimit:2, adminEmail:"jose.melgarejoanillo@k12.dc.gov" });
+  const [settings, setSettings]         = useState({ dailyLimit:1, weeklyLimit:2, adminEmail:"jose.melgarejoanillo@k12.dc.gov" });
   const [newStudent, setNewStudent]     = useState({ name:"", period:"P1" });
   const [passModal, setPassModal]       = useState(null);
   const [selectedBath, setSelectedBath] = useState("GYM");
   const [periodFilter, setPeriodFilter] = useState("ALL");
   const [searchQ, setSearchQ]           = useState("");
   const [tick, setTick]                 = useState(0);
+  const [fbConnected, setFbConnected]   = useState(false);
+  const [queue, setQueue]               = useState([]); // [{studentId, bathroomId, queuedAt, period}]
   const tickRef = useRef();
 
-  // persist key data to localStorage whenever it changes
+  // ── Firebase sync ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    try {
+      const passesRef = ref(db, "passes");
+      const unsub = onValue(passesRef, snap => {
+        const data = snap.val();
+        setPasses(data ? Object.values(data) : []);
+        setFbConnected(true);
+      }, () => setFbConnected(false));
+
+      const lockoutsRef = ref(db, "lockouts");
+      const unsubLo = onValue(lockoutsRef, snap => {
+        const data = snap.val() || {};
+        setLockouts(data);
+        lsSet("pg_lockouts", data);
+      });
+
+      const offensesRef = ref(db, "redOffenses");
+      const unsubOff = onValue(offensesRef, snap => {
+        const data = snap.val() || {};
+        setRedOffenses(data);
+        lsSet("pg_redOffenses", data);
+      });
+
+      const queueRef = ref(db, "queue");
+      const unsubQ = onValue(queueRef, snap => {
+        const data = snap.val();
+        setQueue(data ? Object.values(data).sort((a,b)=>a.queuedAt-b.queuedAt) : []);
+      });
+
+      return () => { unsub(); unsubLo(); unsubOff(); unsubQ(); };
+    } catch(e) { setFbConnected(false); }
+  }, []);
+
+  // ── persist to localStorage ──────────────────────────────────────────────────
   useEffect(() => { lsSet("pg_history",    history);    }, [history]);
   useEffect(() => { lsSet("pg_dailyCount", dailyCount); }, [dailyCount]);
   useEffect(() => { lsSet("pg_weeklyCount",weeklyCount);}, [weeklyCount]);
-  useEffect(() => { lsSet("pg_lockouts",   lockouts);   }, [lockouts]);
+  useEffect(() => { lsSet("pg_redOffenses",redOffenses);}, [redOffenses]);
 
   useEffect(() => { tickRef.current=setInterval(()=>setTick(t=>t+1),1000); return()=>clearInterval(tickRef.current); },[]);
 
@@ -173,8 +227,28 @@ export default function App() {
     const now=Date.now();
     passes.forEach(p=>{
       const el=now-p.startTime;
-      if (!p.alertSent&&el>=YELLOW_MS){ pushAlert("warning",`⚠️ ${sName(p.studentId)} has been gone ${fmtMs(el)}`,p.studentId); setPasses(ps=>ps.map(x=>x.id===p.id?{...x,alertSent:true}:x)); }
-      if (!p.redSent&&el>=RED_MS){ pushAlert("red",`🚨 RED CODE — ${sName(p.studentId)} gone ${fmtMs(el)}. Locked ${LOCKOUT_DAYS} days.`,p.studentId); setLockouts(l=>({...l,[p.studentId]:schoolDaysFromNow(LOCKOUT_DAYS)})); setPasses(ps=>ps.map(x=>x.id===p.id?{...x,redSent:true}:x)); }
+      if (!p.alertSent&&el>=YELLOW_MS){
+        pushAlert("warning",`⚠️ ${sName(p.studentId)} has been gone ${fmtMs(el)}`,p.studentId);
+        // update in Firebase
+        try { update(ref(db,`passes/${p.id}`),{alertSent:true}); } catch{}
+      }
+      if (!p.redSent&&el>=RED_MS){
+        const sid=p.studentId;
+        const currentOffenses=(redOffenses[sid]||0)+1;
+        const isSecondOffense=currentOffenses>=2;
+        const lockUntil=isSecondOffense?YEAR_END:schoolDaysFromNow(LOCKOUT_DAYS);
+        const lockMsg=isSecondOffense
+          ? `🚨 RED CODE (2nd offense) — ${sName(sid)} is locked for the rest of the school year.`
+          : `🚨 RED CODE — ${sName(sid)} gone ${fmtMs(el)}. Locked ${LOCKOUT_DAYS} days.`;
+        pushAlert("red", lockMsg, sid);
+        // update Firebase
+        try {
+          update(ref(db,`passes/${p.id}`),{redSent:true});
+          set(ref(db,`lockouts/${sid}`), lockUntil);
+          set(ref(db,`redOffenses/${sid}`), currentOffenses);
+        } catch{}
+        setRedOffenses(r=>({...r,[sid]:currentOffenses}));
+      }
     });
   },[tick]);
 
@@ -184,7 +258,7 @@ export default function App() {
   const issuePass=()=>{
     const sid=passModal; if(!sid||!selectedBath) return;
     const lo=lockouts[sid]; if(lo&&todayKey()<=lo){pushAlert("warning",`${sName(sid)} is locked out until ${lo}.`,sid);setPassModal(null);return;}
-    // period window check — block first & last 10 min and outside period hours
+    // period window check
     const win=periodWindowCheck(periods);
     if(win){
       const msg = win.reason==="first"
@@ -197,17 +271,24 @@ export default function App() {
       pushAlert("warning", msg, sid); setPassModal(null); return;
     }
     const key=`${sid}_${todayKey()}`,count=dailyCount[key]||0;
-    if(count>=settings.dailyLimit){pushAlert("warning",`${sName(sid)} reached daily limit.`,sid);setPassModal(null);return;}
+    if(count>=settings.dailyLimit){pushAlert("warning",`${sName(sid)} already used their 1 pass for today.`,sid);setPassModal(null);return;}
     const wkey=`${sid}_${weekKey()}`,wcount=weeklyCount[wkey]||0;
-    if(wcount>=settings.weeklyLimit){pushAlert("warning",`${sName(sid)} reached weekly limit (${settings.weeklyLimit}).`,sid);setPassModal(null);return;}
+    if(wcount>=settings.weeklyLimit){pushAlert("warning",`${sName(sid)} reached the weekly limit (${settings.weeklyLimit}).`,sid);setPassModal(null);return;}
     const cp=currentPeriod(periods);
     if(cp&&restrictions.find(r=>r.studentId===sid&&r.periodId===cp.id)){pushAlert("warning",`${sName(sid)} restricted during ${cp.name}.`,sid);setPassModal(null);return;}
     const activeIds=passes.map(p=>p.studentId);
     const cf=conflicts.find(c=>(c.a===sid&&activeIds.includes(c.b))||(c.b===sid&&activeIds.includes(c.a)));
     if(cf){const oid=cf.a===sid?cf.b:cf.a;pushAlert("warning",`Conflict: ${sName(sid)} can't be out with ${sName(oid)}.`,sid);setPassModal(null);return;}
     const bath=bathrooms.find(b=>b.id===selectedBath),inBath=passes.filter(p=>p.bathroomId===selectedBath).length;
-    if(bath&&inBath>=bath.capacity){pushAlert("warning",`${bath.name} is at capacity.`,sid);setPassModal(null);return;}
-    setPasses(ps=>[...ps,{id:Date.now(),studentId:sid,bathroomId:selectedBath,startTime:Date.now(),period:cp?.name||"Free",alertSent:false,redSent:false}]);
+    if(bath&&inBath>=bath.capacity){
+      const qPos=queue.filter(q=>q.bathroomId===selectedBath).length+1;
+      addToQueue(sid, selectedBath);
+      pushAlert("warning",`🔔 ${sName(sid)} added to queue — position #${qPos}.`,sid);
+      setPassModal(null); return;
+    }
+    const newPass={id:Date.now(),studentId:sid,bathroomId:selectedBath,startTime:Date.now(),period:cp?.name||"Free",alertSent:false,redSent:false};
+    // push to Firebase (syncs to all devices instantly)
+    try { set(ref(db,`passes/${newPass.id}`), newPass); } catch { setPasses(ps=>[...ps,newPass]); }
     setDailyCount(dc=>({...dc,[key]:(dc[key]||0)+1}));
     setWeeklyCount(wc=>({...wc,[wkey]:(wc[wkey]||0)+1}));
     setPassModal(null);
@@ -215,18 +296,56 @@ export default function App() {
 
   const returnPass=(passId)=>{
     const p=passes.find(x=>x.id===passId); if(!p) return;
-    setHistory(h=>[{...p,endTime:Date.now(),elapsed:Date.now()-p.startTime},...h]);
-    setPasses(ps=>ps.filter(x=>x.id!==passId));
+    const elapsed=Date.now()-p.startTime;
+    setHistory(h=>[{...p,endTime:Date.now(),elapsed},...h]);
+    try { remove(ref(db,`passes/${passId}`)); } catch { setPasses(ps=>ps.filter(x=>x.id!==passId)); }
+
+    // auto-start next student in queue for this bathroom
+    const nextInQueue = queue.find(q=>q.bathroomId===p.bathroomId);
+    if (nextInQueue) {
+      const sid=nextInQueue.studentId;
+      const cp=currentPeriod(periods);
+      const newPass={id:Date.now(),studentId:sid,bathroomId:nextInQueue.bathroomId,startTime:Date.now(),period:nextInQueue.period||cp?.name||"Free",alertSent:false,redSent:false};
+      try {
+        set(ref(db,`passes/${newPass.id}`), newPass);
+        remove(ref(db,`queue/${nextInQueue.id}`));
+      } catch { setPasses(ps=>[...ps,newPass]); setQueue(q=>q.filter(x=>x.id!==nextInQueue.id)); }
+      pushAlert("warning",`🔔 ${sName(sid)}'s pass started automatically from the queue.`,sid);
+    }
+  };
+
+  // add a student to the bathroom queue
+  const addToQueue=(sid, bathroomId)=>{
+    if (queue.find(q=>q.studentId===sid)) { pushAlert("warning",`${sName(sid)} is already in the queue.`,sid); return; }
+    const cp=currentPeriod(periods);
+    const entry={id:Date.now(),studentId:sid,bathroomId,queuedAt:Date.now(),period:cp?.name||"Free"};
+    try { set(ref(db,`queue/${entry.id}`), entry); } catch { setQueue(q=>[...q,entry]); }
+    // still charge the daily/weekly count at queue time
+    const key=`${sid}_${todayKey()}`;
+    const wkey=`${sid}_${weekKey()}`;
+    setDailyCount(dc=>({...dc,[key]:(dc[key]||0)+1}));
+    setWeeklyCount(wc=>({...wc,[wkey]:(wc[wkey]||0)+1}));
+  };
+
+  const removeFromQueue=(qid, sid)=>{
+    try { remove(ref(db,`queue/${qid}`)); } catch { setQueue(q=>q.filter(x=>x.id!==qid)); }
+    // refund the daily/weekly count
+    const key=`${sid}_${todayKey()}`;
+    const wkey=`${sid}_${weekKey()}`;
+    setDailyCount(dc=>({...dc,[key]:Math.max(0,(dc[key]||1)-1)}));
+    setWeeklyCount(wc=>({...wc,[wkey]:Math.max(0,(wc[wkey]||1)-1)}));
   };
 
   const isLockedOut=(sid)=>{const lo=lockouts[sid];return lo&&todayKey()<=lo;};
   const dailyUsed=(sid)=>dailyCount[`${sid}_${todayKey()}`]||0;
   const weeklyUsed=(sid)=>weeklyCount[`${sid}_${weekKey()}`]||0;
   const activePass=(sid)=>passes.find(p=>p.studentId===sid);
+  const inQueue=(sid)=>queue.find(q=>q.studentId===sid);
   const redCount=alerts.filter(a=>a.type==="red").length;
+  const offenseCount=(sid)=>redOffenses[sid]||0;
 
   const periodWindow = periodWindowCheck(periods);
-  const sharedProps = { students,setStudents,bathrooms,setBathrooms,periods,passes,history,alerts,dailyCount,weeklyCount,lockouts,setLockouts,restrictions,setRestrictions,conflicts,setConflicts,settings,setSettings,newStudent,setNewStudent,passModal,setPassModal,selectedBath,setSelectedBath,periodFilter,setPeriodFilter,searchQ,setSearchQ,tick,returnPass,issuePass,isLockedOut,dailyUsed,weeklyUsed,activePass,sName,redCount,periodWindow,scheduleKey,setScheduleKey };
+  const sharedProps = { students,setStudents,bathrooms,setBathrooms,periods,passes,history,alerts,dailyCount,weeklyCount,lockouts,setLockouts,restrictions,setRestrictions,conflicts,setConflicts,settings,setSettings,newStudent,setNewStudent,passModal,setPassModal,selectedBath,setSelectedBath,periodFilter,setPeriodFilter,searchQ,setSearchQ,tick,returnPass,issuePass,isLockedOut,dailyUsed,weeklyUsed,activePass,sName,redCount,periodWindow,scheduleKey,setScheduleKey,fbConnected,offenseCount,setHistory,redOffenses,queue,addToQueue,removeFromQueue,inQueue };
 
   return (
     <div style={{ fontFamily:"'Inter',-apple-system,BlinkMacSystemFont,sans-serif",background:C.bg,minHeight:"100vh",color:C.text,paddingBottom:70 }}>
@@ -252,6 +371,10 @@ export default function App() {
           </div>
           <div style={{ display:"flex",alignItems:"center",gap:10 }}>
             {redCount>0&&<div style={{ ...pill(C.red,"#fff",12),animation:"pulse 1s infinite",padding:"5px 12px",borderRadius:20 }}>🚨 {redCount} RED</div>}
+            <div title={fbConnected?"Synced with co-teacher":"Offline — changes won't sync"} style={{ display:"flex",alignItems:"center",gap:4,fontSize:11,color:fbConnected?C.green:C.yellow,fontWeight:600 }}>
+              <div style={{ width:7,height:7,borderRadius:"50%",background:fbConnected?C.green:C.yellow,flexShrink:0 }} />
+              {fbConnected?"Live":"Offline"}
+            </div>
             <div style={{ width:36,height:36,borderRadius:"50%",background:GRAD,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:14 }}>JM</div>
           </div>
         </div>
@@ -341,7 +464,7 @@ export default function App() {
 }
 
 // ══ DASHBOARD ════════════════════════════════════════════════════════════════
-function DashTab({ passes,students,bathrooms,periods,alerts,dailyCount,lockouts,tick,returnPass,setPassModal,setSelectedBath,isLockedOut,dailyUsed,weeklyUsed,activePass,settings,searchQ,setSearchQ,periodFilter,setPeriodFilter,periodWindow }) {
+function DashTab({ passes,students,bathrooms,periods,alerts,dailyCount,lockouts,tick,returnPass,setPassModal,setSelectedBath,isLockedOut,dailyUsed,weeklyUsed,activePass,settings,searchQ,setSearchQ,periodFilter,setPeriodFilter,periodWindow,offenseCount,queue,addToQueue,removeFromQueue,inQueue }) {
   const cp=currentPeriod(periods);
   const totalToday=Object.entries(dailyCount).filter(([k])=>k.endsWith(todayKey())).reduce((s,[,v])=>s+v,0);
   const lockedCount=Object.values(lockouts).filter(lo=>todayKey()<=lo).length;
@@ -375,6 +498,38 @@ function DashTab({ passes,students,bathrooms,periods,alerts,dailyCount,lockouts,
             </div>
         }
       </div>
+
+      {/* bathroom queue */}
+      {queue.length > 0 && (
+        <div style={{ padding:"0 16px 16px" }}>
+          <div style={{ fontWeight:800,fontSize:16,marginBottom:10 }}>
+            🔔 Bathroom Queue
+            <span style={{ fontWeight:500,fontSize:13,color:C.sub,marginLeft:8 }}>{queue.length} waiting</span>
+          </div>
+          <div style={{ background:C.white,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden" }}>
+            {queue.map((q,i)=>{
+              const s=students.find(x=>x.id===q.studentId);
+              if(!s) return null;
+              return (
+                <div key={q.id} style={{ display:"flex",alignItems:"center",gap:12,padding:"10px 14px",borderBottom:i<queue.length-1?`1px solid ${C.border}`:"none" }}>
+                  <div style={{ width:26,height:26,borderRadius:"50%",background:GRAD,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:12,flexShrink:0 }}>
+                    {i+1}
+                  </div>
+                  <Avatar student={s} size={36} />
+                  <div style={{ flex:1,minWidth:0 }}>
+                    <div style={{ fontWeight:700,fontSize:14 }}>{s.name}</div>
+                    <div style={{ color:C.sub,fontSize:11 }}>{q.period} · waiting since {new Date(q.queuedAt).toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"})}</div>
+                  </div>
+                  <button style={{ background:"transparent",border:`1.5px solid ${C.red}`,color:C.red,borderRadius:8,fontFamily:"inherit",fontWeight:700,fontSize:12,cursor:"pointer",padding:"5px 10px",flexShrink:0 }}
+                    onClick={()=>removeFromQueue(q.id,q.studentId)}>
+                    Remove
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* period window restriction banner */}
       {periodWindow && (
@@ -439,6 +594,10 @@ function DashTab({ passes,students,bathrooms,periods,alerts,dailyCount,lockouts,
               </div>
               {group.map(s=>{
                 const ap=activePass(s.id),lo=isLockedOut(s.id),used=dailyUsed(s.id),wused=weeklyUsed(s.id),full=used>=settings.dailyLimit,wfull=wused>=settings.weeklyLimit,blocked=lo||wfull;
+                const offenses=offenseCount(s.id);
+                const yearLocked=lo&&lockouts[s.id]===YEAR_END;
+                const iq=inQueue(s.id);
+                const qPos=iq?queue.findIndex(q=>q.id===iq.id)+1:null;
                 return (
                   <div key={s.id} style={{ display:"flex",alignItems:"center",gap:12,padding:"11px 16px",background:C.white,borderBottom:`1px solid ${C.border}`,opacity:blocked&&!ap?.id?0.6:1 }}>
                     <Avatar student={s} size={44} ring={!!ap} />
@@ -447,12 +606,19 @@ function DashTab({ passes,students,bathrooms,periods,alerts,dailyCount,lockouts,
                       <div style={{ display:"flex",gap:5,marginTop:4,flexWrap:"wrap" }}>
                         <span style={pill(full?"#fee2e2":"#f0fdf4",full?C.red:C.green)}>{used}/{settings.dailyLimit}d</span>
                         <span style={pill(wfull?"#fee2e2":"#fefce8",wfull?C.red:C.yellow)}>{wused}/{settings.weeklyLimit}w</span>
-                        {lo&&<span style={pill("#fee2e2",C.red)}>🔒 Locked</span>}
+                        {offenses>0&&<span style={pill(offenses>=2?"#fee2e2":"#fff7ed",offenses>=2?C.red:"#c2410c")}>⚠️ {offenses} offense{offenses>1?"s":""}</span>}
+                        {yearLocked&&<span style={pill("#fee2e2",C.red)}>🔒 Year</span>}
+                        {lo&&!yearLocked&&<span style={pill("#fee2e2",C.red)}>🔒 Locked</span>}
                         {ap&&<span style={pill("#fef9c3","#a16207")}>Out</span>}
                       </div>
                     </div>
-                    {!ap&&!blocked
+                    {!ap&&!iq&&!blocked
                       ? <button style={{ ...igBtn("primary"),padding:"8px 16px",fontSize:13,borderRadius:10,flexShrink:0,opacity:periodWindow?0.4:1,cursor:periodWindow?"not-allowed":"pointer" }} disabled={!!periodWindow} onClick={()=>{setPassModal(s.id);setSelectedBath("GYM");}}>Pass</button>
+                      : iq
+                        ? <div style={{ textAlign:"right",flexShrink:0 }}>
+                            <div style={{ ...pill("#fef3c7","#d97706",11),marginBottom:4 }}>#{qPos} in line</div>
+                            <button style={{ background:"transparent",border:`1.5px solid ${C.red}`,color:C.red,borderRadius:8,fontFamily:"inherit",fontWeight:700,fontSize:11,cursor:"pointer",padding:"4px 8px" }} onClick={()=>removeFromQueue(iq.id,s.id)}>Remove</button>
+                          </div>
                       : ap
                         ? <button style={{ background:"transparent",border:`1.5px solid ${C.green}`,color:C.green,borderRadius:10,fontFamily:"inherit",fontWeight:700,fontSize:13,cursor:"pointer",padding:"8px 14px",flexShrink:0 }} onClick={()=>returnPass(ap.id)}>Return ✓</button>
                         : <span style={{ color:C.sub,fontSize:12,fontWeight:600,flexShrink:0 }}>{lo?"Locked":wfull?"Wk limit":"Full"}</span>
@@ -768,7 +934,7 @@ function SettingsTab({ settings,setSettings,alerts,LOCKOUT_DAYS,scheduleKey,setS
       </div>
       <div style={{ ...card,borderRadius:16,marginBottom:12 }}>
         <div style={{ fontWeight:700,fontSize:15,marginBottom:12 }}>Timer Rules</div>
-        {[{icon:"🟢",text:"Green zone: 0:00 – 5:00 min"},{icon:"⚠️",text:"Alert to teacher at 5:00 min"},{icon:"🚨",text:`Red Code at 10:00 → ${LOCKOUT_DAYS}-day lockout`},{icon:"📅",text:`Weekly limit: ${settings.weeklyLimit} passes/student`},{icon:"⏱️",text:"No passes in first or last 10 min of any period"}].map((r,i,arr)=>(
+        {[{icon:"🟢",text:"Green zone: 0:00 – 5:00 min"},{icon:"⚠️",text:"Alert to teacher at 5:00 min"},{icon:"🚨",text:`1st Red Code (10:00+) → ${LOCKOUT_DAYS}-day lockout`},{icon:"🔴",text:"2nd Red Code → Locked for the rest of the school year"},{icon:"📅",text:`Weekly limit: ${settings.weeklyLimit} passes/student`},{icon:"⏱️",text:"No passes in first or last 10 min of any period"}].map((r,i,arr)=>(
           <div key={i} style={{ display:"flex",gap:14,alignItems:"center",padding:"9px 0",borderBottom:i<arr.length-1?`1px solid ${C.border}`:"none" }}>
             <span style={{ fontSize:20 }}>{r.icon}</span>
             <span style={{ fontSize:14,color:C.sub }}>{r.text}</span>
