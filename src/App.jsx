@@ -103,6 +103,12 @@ const SEED_STUDENTS = [
 
 const SEED_BATHROOMS = [{ id:"GYM", name:"Gym Corridor", capacity:1 }];
 
+// ── teachers ──────────────────────────────────────────────────────────────────
+const SEED_TEACHERS = [
+  { id:"T1", name:"Melgarejo",  room:"C234" },
+  { id:"T2", name:"Chatalian",  room:"C234" },
+];
+
 const YELLOW_MS    = 5 * 60 * 1000;
 const RED_MS       = 10 * 60 * 1000;
 const LOCKOUT_DAYS = 3;
@@ -157,6 +163,8 @@ export default function App() {
   const [tab, setTab]                   = useState("dashboard");
   const [students, setStudents]         = useState(SEED_STUDENTS);
   const [bathrooms, setBathrooms]       = useState(SEED_BATHROOMS);
+  const [teachers, setTeachers]         = useState(SEED_TEACHERS);
+  const [selectedTeacher, setSelectedTeacher] = useState(SEED_TEACHERS[0].id);
   const [scheduleKey, setScheduleKey]   = useState("regular");
   const periods                         = SCHEDULES[scheduleKey].periods;
   const [passes, setPasses]             = useState([]);
@@ -212,6 +220,10 @@ export default function App() {
         const d=snap.val();
         if (d) setStudents(Object.values(d).sort((a,b)=>a.id-b.id));
       });
+      sub("teachers", snap => {
+        const d=snap.val();
+        if (d) setTeachers(Object.values(d));
+      });
       sub("restrictions", snap => {
         const d=snap.val();
         setRestrictions(d ? Object.values(d) : []);
@@ -240,6 +252,7 @@ export default function App() {
 
   // Wrapped setters that write to Firebase AND local state
   const syncStudents     = (fn) => { setStudents(prev => { const next=typeof fn==="function"?fn(prev):fn; fbSet("students", Object.fromEntries(next.map(s=>[s.id,s]))); return next; }); };
+  const syncTeachers     = (fn) => { setTeachers(prev => { const next=typeof fn==="function"?fn(prev):fn; fbSet("teachers", Object.fromEntries(next.map(t=>[t.id,t]))); return next; }); };
   const syncRestrictions = (fn) => { setRestrictions(prev => { const next=typeof fn==="function"?fn(prev):fn; fbSet("restrictions", next.length?Object.fromEntries(next.map(r=>[r.id,r])):null); return next; }); };
   const syncConflicts    = (fn) => { setConflicts(prev => { const next=typeof fn==="function"?fn(prev):fn; fbSet("conflicts", next.length?Object.fromEntries(next.map(c=>[c.id,c])):null); return next; }); };
   const syncSettings     = (fn) => { setSettings(prev => { const next=typeof fn==="function"?fn(prev):fn; fbSet("settings", next); return next; }); };
@@ -312,7 +325,8 @@ export default function App() {
       pushAlert("warning",`🔔 ${sName(sid)} added to queue — position #${qPos}.`,sid);
       setPassModal(null); return;
     }
-    const newPass={id:Date.now(),studentId:sid,bathroomId:selectedBath,startTime:Date.now(),period:cp?.name||"Free",alertSent:false,redSent:false};
+    const teacher=teachers.find(t=>t.id===selectedTeacher);
+    const newPass={id:Date.now(),studentId:sid,bathroomId:selectedBath,startTime:Date.now(),period:cp?.name||"Free",alertSent:false,redSent:false,teacherId:selectedTeacher,teacherName:teacher?.name||"",teacherRoom:teacher?.room||""};
     fbSet(`passes/${newPass.id}`, newPass);
     syncDailyCount(dc=>({...dc,[key]:(dc[key]||0)+1}));
     syncWeeklyCount(wc=>({...wc,[wkey]:(wc[wkey]||0)+1}));
@@ -363,7 +377,7 @@ export default function App() {
   const offenseCount=(sid)=>redOffenses[sid]||0;
 
   const periodWindow = periodWindowCheck(periods);
-  const sharedProps = { students, setStudents:syncStudents, bathrooms, setBathrooms, periods, passes, history, setHistory, alerts, dailyCount, weeklyCount, lockouts, setLockouts:syncLockouts, restrictions, setRestrictions:syncRestrictions, conflicts, setConflicts:syncConflicts, settings, setSettings:syncSettings, newStudent, setNewStudent, passModal, setPassModal, selectedBath, setSelectedBath, periodFilter, setPeriodFilter, searchQ, setSearchQ, tick, returnPass, issuePass, isLockedOut, dailyUsed, weeklyUsed, activePass, sName, redCount, periodWindow, scheduleKey, setScheduleKey:syncScheduleKey, fbConnected, offenseCount, redOffenses, queue, addToQueue, removeFromQueue, inQueue, fbSet, fbDel };
+  const sharedProps = { students, setStudents:syncStudents, bathrooms, setBathrooms, periods, passes, history, setHistory, alerts, dailyCount, weeklyCount, lockouts, setLockouts:syncLockouts, restrictions, setRestrictions:syncRestrictions, conflicts, setConflicts:syncConflicts, settings, setSettings:syncSettings, newStudent, setNewStudent, passModal, setPassModal, selectedBath, setSelectedBath, periodFilter, setPeriodFilter, searchQ, setSearchQ, tick, returnPass, issuePass, isLockedOut, dailyUsed, weeklyUsed, activePass, sName, redCount, periodWindow, scheduleKey, setScheduleKey:syncScheduleKey, fbConnected, offenseCount, redOffenses, queue, addToQueue, removeFromQueue, inQueue, fbSet, fbDel, teachers, setTeachers:syncTeachers, selectedTeacher, setSelectedTeacher };
 
   return (
     <div style={{ fontFamily:"'Inter',-apple-system,BlinkMacSystemFont,sans-serif",background:C.bg,minHeight:"100vh",color:C.text,paddingBottom:70 }}>
@@ -410,8 +424,7 @@ export default function App() {
         {tab==="students"  && <StudentsTab {...sharedProps} />}
         {tab==="rules"     && <RulesTab {...sharedProps} />}
         {tab==="history"   && <HistoryTab history={history} setHistory={setHistory} students={students} bathrooms={bathrooms} fbDel={fbDel} />}
-        {tab==="settings"  && <SettingsTab {...sharedProps} LOCKOUT_DAYS={LOCKOUT_DAYS} />}
-      </div>
+        {tab==="settings"  && <SettingsTab {...sharedProps} LOCKOUT_DAYS={LOCKOUT_DAYS} />}      </div>
 
       {/* BOTTOM NAV */}
       <div style={{ position:"fixed",bottom:0,left:0,right:0,background:C.white,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:100,paddingBottom:"env(safe-area-inset-bottom)" }}>
@@ -437,13 +450,56 @@ export default function App() {
             <div style={{ background:C.white,borderRadius:"24px 24px 0 0",width:"100%",maxWidth:600,padding:"20px 20px 44px",animation:"sheetUp .3s cubic-bezier(.32,.72,0,1)" }} onClick={e=>e.stopPropagation()}>
               <div style={{ width:36,height:4,background:"#e0e0e0",borderRadius:4,margin:"0 auto 20px" }} />
               {s&&<>
-                <div style={{ display:"flex",alignItems:"center",gap:14,marginBottom:16 }}>
-                  <Avatar student={s} size={56} ring />
+                {/* student info */}
+                <div style={{ display:"flex",alignItems:"center",gap:14,marginBottom:18 }}>
+                  <Avatar student={s} size={52} ring />
                   <div>
                     <div style={{ fontWeight:800,fontSize:19 }}>{s.name}</div>
-                    <div style={{ color:C.sub,fontSize:13 }}>{periods.find(p=>p.id===s.period)?.name} · Gym Corridor</div>
+                    <div style={{ color:C.sub,fontSize:13 }}>{periods.find(p=>p.id===s.period)?.name}</div>
                   </div>
                 </div>
+
+                {/* teacher selector */}
+                <div style={{ marginBottom:14 }}>
+                  <div style={{ fontSize:11,fontWeight:700,color:C.sub,letterSpacing:.5,marginBottom:6 }}>ISSUED BY</div>
+                  <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+                    {teachers.map(t=>{
+                      const active=selectedTeacher===t.id;
+                      return (
+                        <button key={t.id} onClick={()=>setSelectedTeacher(t.id)} style={{ flex:1,minWidth:100,border:"none",borderRadius:12,padding:"10px 14px",cursor:"pointer",transition:"all .2s",
+                          background:active?GRAD:"#f5f5f5", color:active?"#fff":C.text, fontFamily:"inherit", fontWeight:700, fontSize:14 }}>
+                          <div>{t.name}</div>
+                          <div style={{ fontSize:11,opacity:.8,fontWeight:500,marginTop:2 }}>{t.room}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* selected teacher badge */}
+                {(() => {
+                  const t=teachers.find(x=>x.id===selectedTeacher);
+                  return t ? (
+                    <div style={{ background:"#f0f9ff",border:`1.5px solid #bae6fd`,borderRadius:10,padding:"8px 14px",marginBottom:14,fontSize:13,color:"#0369a1",fontWeight:600,textAlign:"center" }}>
+                      📋 {t.name}-{t.room}
+                    </div>
+                  ) : null;
+                })()}
+
+                {/* bathroom selector */}
+                <div style={{ marginBottom:16 }}>
+                  <div style={{ fontSize:11,fontWeight:700,color:C.sub,letterSpacing:.5,marginBottom:6 }}>DESTINATION</div>
+                  {bathrooms.length===1
+                    ? <div style={{ background:"#f5f5f5",borderRadius:10,padding:"10px 14px",fontSize:14,fontWeight:600,color:C.text }}>🚽 {bathrooms[0].name}</div>
+                    : <select style={{ ...igInput }} value={selectedBath} onChange={e=>setSelectedBath(e.target.value)}>
+                        {bathrooms.map(b=>{
+                          const inUse=passes.filter(p=>p.bathroomId===b.id).length,full=inUse>=b.capacity;
+                          return <option key={b.id} value={b.id} disabled={full}>{b.name}{full?" — FULL":""}</option>;
+                        })}
+                      </select>
+                  }
+                </div>
+
                 {win && (
                   <div style={{ background:"#fff7ed",border:`1.5px solid ${C.yellow}`,borderRadius:12,padding:"10px 14px",marginBottom:14,display:"flex",gap:10,alignItems:"center" }}>
                     <span style={{ fontSize:20 }}>{win.reason==="outside"?"🏫":"⏱️"}</span>
@@ -656,8 +712,9 @@ function StoryBubble({ pass, student, tick, onReturn }) {
   const el=Date.now()-pass.startTime, over=el>YELLOW_MS, red=el>=RED_MS;
   const color=red?C.red:over?C.yellow:C.green;
   const pct=Math.min(el/YELLOW_MS,1), r=30, circ=2*Math.PI*r;
+  const teacherLabel=pass.teacherName&&pass.teacherRoom?`${pass.teacherName}-${pass.teacherRoom}`:pass.teacherName||"";
   return (
-    <div style={{ flexShrink:0,width:84,display:"flex",flexDirection:"column",alignItems:"center",gap:5,animation:"pop .3s" }}>
+    <div style={{ flexShrink:0,width:90,display:"flex",flexDirection:"column",alignItems:"center",gap:5,animation:"pop .3s" }}>
       <div style={{ position:"relative",width:72,height:72,cursor:"pointer" }} onClick={()=>onReturn(pass.id)} title="Tap to return">
         <svg width={72} height={72} style={{ position:"absolute",top:0,left:0,transform:"rotate(-90deg)" }}>
           <circle cx={36} cy={36} r={r} fill="none" stroke="#efefef" strokeWidth={4.5} />
@@ -669,7 +726,8 @@ function StoryBubble({ pass, student, tick, onReturn }) {
         {red&&<div style={{ position:"absolute",inset:5,borderRadius:"50%",background:"rgba(239,68,68,.2)",animation:"pulse 1s infinite" }} />}
       </div>
       <div style={{ fontWeight:800,fontSize:13,color,fontVariantNumeric:"tabular-nums" }}>{fmtMs(el)}</div>
-      <div style={{ fontSize:11,color:C.sub,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:84,textAlign:"center" }}>{student.name.split(" ")[0]}</div>
+      <div style={{ fontSize:11,color:C.sub,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:90,textAlign:"center" }}>{student.name.split(" ")[0]}</div>
+      {teacherLabel&&<div style={{ fontSize:9,color:C.sub,fontWeight:600,textAlign:"center",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:90 }}>{teacherLabel}</div>}
       {red&&<div style={{ fontSize:9,color:C.red,fontWeight:800,animation:"pulse 1s infinite",letterSpacing:.5 }}>RED CODE</div>}
     </div>
   );
@@ -873,13 +931,17 @@ function HistoryTab({ history,setHistory,students,bathrooms,fbDel }) {
         const label=h.elapsed>=RED_MS?"Red Code":h.elapsed>=YELLOW_MS?"Over limit":"Normal";
         const date = h.endTime ? new Date(h.endTime).toLocaleDateString(undefined,{month:"short",day:"numeric"}) : "";
         const time = h.endTime ? new Date(h.endTime).toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"}) : "";
+        const teacherLabel = h.teacherName && h.teacherRoom ? `${h.teacherName}-${h.teacherRoom}` : h.teacherName || "";
         return (
           <div key={h.id} style={{ display:"flex",alignItems:"center",gap:12,padding:"12px 16px",background:C.white,borderBottom:`1px solid ${C.border}` }}>
             {s&&<Avatar student={s} size={44}/>}
             <div style={{ flex:1,minWidth:0 }}>
               <div style={{ fontWeight:700,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{s?.name||"Unknown"}</div>
               <div style={{ color:C.sub,fontSize:12,marginTop:2 }}>{h.period} · {bathrooms.find(b=>b.id===h.bathroomId)?.name||h.bathroomId}</div>
-              <div style={{ color:C.sub,fontSize:11,marginTop:1 }}>{date} {time}</div>
+              <div style={{ display:"flex",gap:6,alignItems:"center",marginTop:3,flexWrap:"wrap" }}>
+                {teacherLabel&&<span style={{ ...pill("#f0f9ff","#0369a1",10) }}>👤 {teacherLabel}</span>}
+                <span style={{ color:C.sub,fontSize:11 }}>{date} {time}</span>
+              </div>
             </div>
             <div style={{ textAlign:"right",flexShrink:0 }}>
               <div style={{ fontWeight:900,fontSize:18,color,fontVariantNumeric:"tabular-nums" }}>{fmtMs(h.elapsed)}</div>
@@ -893,10 +955,36 @@ function HistoryTab({ history,setHistory,students,bathrooms,fbDel }) {
 }
 
 // ══ SETTINGS TAB ═════════════════════════════════════════════════════════════
-function SettingsTab({ settings,setSettings,alerts,LOCKOUT_DAYS,scheduleKey,setScheduleKey }) {
+function SettingsTab({ settings,setSettings,alerts,LOCKOUT_DAYS,scheduleKey,setScheduleKey,teachers,setTeachers,weeklyUsed }) {
+  const [newTeacher, setNewTeacher] = useState({ name:"", room:"" });
   return (
     <div style={{ padding:16 }}>
       <div style={{ fontWeight:800,fontSize:18,marginBottom:16 }}>Settings</div>
+
+      {/* Teacher management */}
+      <div style={{ ...card,borderRadius:16,marginBottom:12 }}>
+        <div style={{ fontWeight:700,fontSize:15,marginBottom:4 }}>👤 Teachers</div>
+        <div style={{ color:C.sub,fontSize:13,marginBottom:14 }}>Manage the teachers who can issue passes.</div>
+        {teachers.map(t=>(
+          <div key={t.id} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${C.border}` }}>
+            <div>
+              <span style={{ fontWeight:700,fontSize:14 }}>{t.name}</span>
+              <span style={{ ...pill("#f0f9ff","#0369a1",11),marginLeft:8 }}>{t.room}</span>
+            </div>
+            <button style={{ ...igBtn("danger"),fontSize:12,padding:"5px 12px",borderRadius:8 }}
+              onClick={()=>setTeachers(ts=>ts.filter(x=>x.id!==t.id))}>Remove</button>
+          </div>
+        ))}
+        <div style={{ display:"flex",gap:8,marginTop:12,flexWrap:"wrap" }}>
+          <input style={{ ...igInput,flex:2,minWidth:100 }} placeholder="Last name" value={newTeacher.name} onChange={e=>setNewTeacher(t=>({...t,name:e.target.value}))} />
+          <input style={{ ...igInput,flex:1,minWidth:70 }} placeholder="Room (e.g. C234)" value={newTeacher.room} onChange={e=>setNewTeacher(t=>({...t,room:e.target.value}))} />
+          <button style={{ ...igBtn("grad"),borderRadius:10,flexShrink:0 }} onClick={()=>{
+            if(!newTeacher.name.trim()||!newTeacher.room.trim()) return;
+            setTeachers(ts=>[...ts,{id:`T${Date.now()}`,name:newTeacher.name.trim(),room:newTeacher.room.trim()}]);
+            setNewTeacher({name:"",room:""});
+          }}>+ Add</button>
+        </div>
+      </div>
 
       {/* Schedule switcher */}
       <div style={{ ...card,borderRadius:16,marginBottom:12 }}>
