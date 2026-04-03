@@ -263,13 +263,14 @@ export default function App() {
 
   useEffect(() => { tickRef.current=setInterval(()=>setTick(t=>t+1),1000); return()=>clearInterval(tickRef.current); },[]);
 
+  const lastQueueClearRef = useRef(null); // track last clear to avoid repeating
+
   useEffect(() => {
     const now=Date.now();
     passes.forEach(p=>{
       const el=now-p.startTime;
       if (!p.alertSent&&el>=YELLOW_MS){
         pushAlert("warning",`⚠️ ${sName(p.studentId)} has been gone ${fmtMs(el)}`,p.studentId);
-        // update in Firebase
         try { update(ref(db,`passes/${p.id}`),{alertSent:true}); } catch{}
       }
       if (!p.redSent&&el>=RED_MS){
@@ -289,6 +290,31 @@ export default function App() {
         setRedOffenses(r=>({...r,[sid]:currentOffenses}));
       }
     });
+
+    // ── Auto-clear queue when restriction window starts ──────────────────────
+    if (queue.length > 0) {
+      const win = periodWindowCheck(periods);
+      if (win && win.reason !== "outside") {
+        // We're in a first/last 10-min restriction — clear the entire queue
+        // Use a key to avoid firing every second during the same window
+        const windowKey = `${win.period}-${win.reason}`;
+        if (lastQueueClearRef.current !== windowKey) {
+          lastQueueClearRef.current = windowKey;
+          queue.forEach(q => {
+            fbDel(`queue/${q.id}`);
+            // Refund daily and weekly count
+            const key  = `${q.studentId}_${todayKey()}`;
+            const wkey = `${q.studentId}_${weekKey()}`;
+            syncDailyCount(dc => ({ ...dc, [key]:  Math.max(0, (dc[key]  || 1) - 1) }));
+            syncWeeklyCount(wc => ({ ...wc, [wkey]: Math.max(0, (wc[wkey] || 1) - 1) }));
+          });
+          pushAlert("warning", `⏱️ Queue cleared — ${queue.length} student${queue.length>1?"s":""} removed from line (${win.reason==="first"?"first":"last"} 10 min of ${win.period}).`, null);
+        }
+      } else {
+        // Reset the key when outside restriction so it can fire again next time
+        if (win === null || win.reason === "outside") lastQueueClearRef.current = null;
+      }
+    }
   },[tick]);
 
   const sName=(id)=>students.find(s=>s.id===id)?.name||"Unknown";
