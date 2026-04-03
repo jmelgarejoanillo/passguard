@@ -94,6 +94,8 @@ const SEED_STUDENTS = [
   mk("Litzy","P5"), mk("Gabriel","P5"), mk("Emily","P5"), mk("Carlos M.","P5"),
   mk("Genesis N.","P5"), mk("Wilson","P5"), mk("Ashley","P5"), mk("Zyykee","P5"),
   mk("Jian","P5"), mk("Tukiya","P5"),
+  mk("Delilah","P3"), mk("Salif-Rasheed","P3"), mk("Andrew","P3"), mk("Zyykee","P3"),
+  mk("Jian","P3"), mk("Zari'Anna","P3"), mk("Blen","P3"),
   mk("Kelvin","ADV"), mk("Marco","ADV"), mk("Andrea","ADV"), mk("Ashley","ADV"),
   mk("Valentina","ADV"), mk("Yeferson","ADV"), mk("Hector","ADV"), mk("Nery","ADV"),
   mk("Kevin","ADV"), mk("Kasey","ADV"), mk("Cesar","ADV"), mk("Camila","ADV"),
